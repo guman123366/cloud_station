@@ -1,5 +1,6 @@
 ﻿#include "UDPMultiCommunication.h"
 #include <QAbstractSocket>
+#include <algorithm>
 #include<QDateTime>
 #include<QCoreApplication>
 #include<QDir>
@@ -47,6 +48,8 @@ UDPMultiCommunication::UDPMultiCommunication(QObject* parent)
 	, m_filePrefix("fileData")
 	, m_currentRxFileSize(0)
 	, m_currentTxFileSize(0)
+	, m_uploadCheckTimer(nullptr)
+	, m_isUploading(false)
 {
 	m_pSocket = new QUdpSocket(this);
 	m_controlSocket = new QUdpSocket(this);
@@ -796,6 +799,8 @@ bool UDPMultiCommunication::initialize()
 	loadLogFileConfig();
 	// 启动上传检查定时器
 	startUploadCheckTimer();
+	// 启动后立即补扫历史文件，避免等待首个定时器周期
+	uploadAllEligibleFiles();
 
 	qDebug() << "UDPMultiCommunication initialized successfully";
 	return true;
@@ -1116,30 +1121,8 @@ void UDPMultiCommunication::uploadAllRemainingFiles()
 }
 void UDPMultiCommunication::uploadAllEligibleFiles()
 {
-	// 检查接收文件目录
-	QDir rxDir(m_rxFileFolder);
-	QStringList rxFiles = rxDir.entryList(QStringList() << "*.dat", QDir::Files);
-
-	for (const QString& fileName : rxFiles) {
-		QString filePath = rxDir.absoluteFilePath(fileName);
-
-		// 检查文件是否满足上传条件（包括大小和时间）
-
-		scheduleFileUpload(filePath);
-
-	}
-
-	// 检查发送文件目录
-	QDir txDir(m_txFileFolder);
-	QStringList txFiles = txDir.entryList(QStringList() << "*.dat", QDir::Files);
-
-	for (const QString& fileName : txFiles) {
-		QString filePath = txDir.absoluteFilePath(fileName);
-
-
-		scheduleFileUpload(filePath);
-
-	}
+	scheduleEligibleFilesFromDirectory(m_rxFileFolder, m_currentRxFileName);
+	scheduleEligibleFilesFromDirectory(m_txFileFolder, m_currentTxFileName);
 }
 QJsonObject UDPMultiCommunication::MetadataToJsonObject()
 {
@@ -1197,39 +1180,7 @@ void UDPMultiCommunication::checkAndUploadCompletedFiles()
 {
 	qDebug() << "Checking for completed files to upload...";
 
-	// 检查接收文件目录
-	QDir rxDir(m_rxFileFolder);
-	QStringList rxFiles = rxDir.entryList(QStringList() << "*.dat", QDir::Files);
-
-	for (const QString& fileName : rxFiles) {
-		QString filePath = rxDir.absoluteFilePath(fileName);
-
-		// 跳过当前正在写入的文件
-		if (filePath == m_currentRxFileName) {
-			continue;
-		}
-
-		if (isFileReadyForUpload(filePath)) {
-			scheduleFileUpload(filePath);
-		}
-	}
-
-	// 检查发送文件目录
-	QDir txDir(m_txFileFolder);
-	QStringList txFiles = txDir.entryList(QStringList() << "*.dat", QDir::Files);
-
-	for (const QString& fileName : txFiles) {
-		QString filePath = txDir.absoluteFilePath(fileName);
-
-		// 跳过当前正在写入的文件
-		if (filePath == m_currentTxFileName) {
-			continue;
-		}
-
-		if (isFileReadyForUpload(filePath)) {
-			scheduleFileUpload(filePath);
-		}
-	}
+	uploadAllEligibleFiles();
 
 	qDebug() << "Completed file check, pending uploads:" << m_pendingUploadFiles.size();
 }
@@ -1245,7 +1196,7 @@ bool UDPMultiCommunication::isFileReadyForUpload(const QString& filePath)
 	QDateTime lastModified = fileInfo.lastModified();
 	QDateTime now = QDateTime::currentDateTime();
 
-	// 如果文件在最近30秒内被修改过，认为还在写入中
+	// 如果文件在最近2秒内被修改过，认为还在写入中
 	if (lastModified.secsTo(now) < 2) {
 		return false;
 	}
@@ -1256,6 +1207,38 @@ bool UDPMultiCommunication::isFileReadyForUpload(const QString& filePath)
 	}
 
 	return true;
+}
+
+bool UDPMultiCommunication::shouldScheduleFileForUpload(const QString& filePath, const QString& currentFilePath)
+{
+	if (filePath.isEmpty()) {
+		return false;
+	}
+
+	QFileInfo fileInfo(filePath);
+	if (!fileInfo.exists()) {
+		return false;
+	}
+
+	if (!currentFilePath.isEmpty() &&
+		fileInfo.absoluteFilePath() == QFileInfo(currentFilePath).absoluteFilePath()) {
+		return false;
+	}
+
+	return isFileReadyForUpload(fileInfo.absoluteFilePath());
+}
+
+void UDPMultiCommunication::scheduleEligibleFilesFromDirectory(const QString& directoryPath, const QString& currentFilePath)
+{
+	QDir dir(directoryPath);
+	const QStringList files = dir.entryList(QStringList() << "*.dat", QDir::Files);
+
+	for (const QString& fileName : files) {
+		const QString filePath = dir.absoluteFilePath(fileName);
+		if (shouldScheduleFileForUpload(filePath, currentFilePath)) {
+			scheduleFileUpload(filePath);
+		}
+	}
 }
 
 void UDPMultiCommunication::scheduleFileUpload(const QString& filePath)
@@ -1295,115 +1278,9 @@ void UDPMultiCommunication::scheduleFileUpload(const QString& filePath)
 
 void UDPMultiCommunication::processUploadQueue()
 {
-	//// 检查是否已经在处理中
-	//{
-	//	QMutexLocker locker(&m_uploadMutex);
-	//	if (m_isUploading) {
-	//		return;
-	//	}
-
-	//	if (m_pendingUploadFiles.isEmpty()) {
-	//		return;
-	//	}
-
-	//	// 设置上传状态
-	//	m_isUploading = true;
-	//}
-
-	//qDebug() << "Starting upload queue processing...";
-
-	//// 循环处理队列中的所有文件
-	//while (true) {
-	//	QString filePath;
-	//	{
-	//		QMutexLocker locker(&m_uploadMutex);
-	//		if (m_pendingUploadFiles.isEmpty()) {
-	//			m_isUploading = false;  // 队列为空时重置状态
-	//			qDebug() << "Upload queue processing completed";
-	//			break;
-	//		}
-
-	//		// 获取下一个待上传文件
-	//		filePath = *m_pendingUploadFiles.begin();
-	//		// 这里先不remove，等上传成功后再移除
-	//	}
-
-	//	qDebug() << "Processing upload for file:" << filePath;
-
-	//	// 确定数据类型
-	//	QString dataType = "STATION_PARMA"; // 默认类型
-	//	if (filePath.contains("rx", Qt::CaseInsensitive)) {
-	//		dataType = "STATION_PARMA";
-	//	}
-	//	else if (filePath.contains("tx", Qt::CaseInsensitive)) {
-	//		dataType = "STATION_CONTROL";
-	//	}
-
-	//	// 执行上传（在主线程中同步执行）
-	//	bool success = false;
-	//	bool fileDeleted = false;
-
-	//	try {
-	//		// 上传文件
-	//		success = uploadFileImpl(filePath, dataType);
-
-	//		if (success) {
-	//			// 检查文件是否已被uploadFileImpl删除
-	//			fileDeleted = !QFile::exists(filePath);
-
-	//			if (fileDeleted) {
-	//				qInfo() << "Successfully uploaded and deleted file:" << filePath;
-	//			}
-	//			else {
-	//				qWarning() << "File uploaded but not deleted:" << filePath;
-	//				// 尝试手动删除
-	//				if (QFile::remove(filePath)) {
-	//					qInfo() << "Manually deleted uploaded file:" << filePath;
-	//					fileDeleted = true;
-	//				}
-	//				else {
-	//					qWarning() << "Failed to delete uploaded file:" << filePath;
-	//				}
-	//			}
-	//		}
-	//		else {
-	//			qWarning() << "Failed to upload file:" << filePath;
-	//		}
-	//	}
-	//	catch (const std::exception& e) {
-	//		qWarning() << "Exception during upload:" << e.what();
-	//		success = false;
-	//	}
-	//	catch (...) {
-	//		qWarning() << "Unknown exception during upload";
-	//		success = false;
-	//	}
-
-	//	{
-	//		QMutexLocker locker(&m_uploadMutex);
-
-	//		if (success && fileDeleted) {
-	//			// 上传成功且文件已删除，从队列中移除
-	//			if (m_pendingUploadFiles.contains(filePath)) {
-	//				m_pendingUploadFiles.removeAll(filePath);
-	//				qInfo() << "File removed from upload queue:" << filePath;
-	//			}
-	//		}
-	//		else if (!success) {
-	//			qWarning() << "Upload failed, file remains in queue:" << filePath;
-	//			// 如果上传失败，文件保留在队列中（已经是）
-
-	//			// 检查文件是否仍然存在
-	//			if (!QFile::exists(filePath)) {
-	//				// 文件不存在了，从队列中移除
-	//				m_pendingUploadFiles.removeAll(filePath);
-	//				qWarning() << "File does not exist, removed from queue:" << filePath;
-	//			}
-	//		}
-	//	}
 	const int MAX_RETRY = 3;  // 最大重试次数
+	QString filePath;
 
-	   // 检查是否已经在处理中
 	{
 		QMutexLocker locker(&m_uploadMutex);
 		if (m_isUploading) {
@@ -1415,90 +1292,61 @@ void UDPMultiCommunication::processUploadQueue()
 		}
 
 		m_isUploading = true;
+		filePath = m_pendingUploadFiles.first();
 	}
 
-	qDebug() << "Starting upload queue processing...";
+	qDebug() << "Processing upload for file:" << filePath;
 
-	// 循环处理队列中的所有文件
-	while (true) {
-		QString filePath;
-		{
-			QMutexLocker locker(&m_uploadMutex);
-			if (m_pendingUploadFiles.isEmpty()) {
-				m_isUploading = false;
-				qDebug() << "Upload queue processing completed";
-				break;
-			}
+	QString dataType = "STATION_PARMA";
+	if (filePath.contains("tx", Qt::CaseInsensitive)) {
+		dataType = "STATION_CONTROL";
+	}
 
-			// 获取下一个待上传文件
-			filePath = *m_pendingUploadFiles.begin();
+	bool success = false;
+	int retryCount = 0;
+
+	while (retryCount < MAX_RETRY && !success) {
+		if (retryCount > 0) {
+			qDebug() << "Retry" << retryCount << "for file:" << filePath;
+			QThread::msleep(1000);
 		}
 
-		qDebug() << "Processing upload for file:" << filePath;
-
-		// 确定数据类型
-		QString dataType = "STATION_PARMA";
-		if (filePath.contains("rx", Qt::CaseInsensitive)) {
-			dataType = "STATION_PARMA";
+		try {
+			success = uploadFileImpl(filePath, dataType);
 		}
-		else if (filePath.contains("tx", Qt::CaseInsensitive)) {
-			dataType = "STATION_CONTROL";
+		catch (...) {
+			qWarning() << "Exception during upload";
+			success = false;
 		}
+		retryCount++;
+	}
 
-		// 执行上传
-		bool success = false;
-		bool fileDeleted = false;
-		int retryCount = 0;
-
-		// 重试循环
-		while (retryCount < MAX_RETRY && !success) {
-			if (retryCount > 0) {
-				qDebug() << "Retry" << retryCount << "for file:" << filePath;
-				QThread::msleep(1000); // 重试前等待1秒
-			}
-
-			try {
-				success = uploadFileImpl(filePath, dataType);
-			}
-			catch (...) {
-				qWarning() << "Exception during upload";
-				success = false;
-			}
-			retryCount++;
-		}
+	bool shouldScheduleNext = false;
+	{
+		QMutexLocker locker(&m_uploadMutex);
+		m_pendingUploadFiles.removeAll(filePath);
 
 		if (success) {
-			// 上传成功，检查文件是否已删除
-			fileDeleted = !QFile::exists(filePath);
-			if (!fileDeleted) {
-				fileDeleted = QFile::remove(filePath);
+			if (QFile::exists(filePath) && !QFile::remove(filePath)) {
+				qWarning() << "Failed to delete uploaded file:" << filePath;
 			}
-
-			QMutexLocker locker(&m_uploadMutex);
-			m_pendingUploadFiles.removeAll(filePath);
 			qInfo() << "File uploaded successfully:" << filePath;
 		}
-		else {
-			// 上传失败，将文件移到队列尾部，避免阻塞
-			QMutexLocker locker(&m_uploadMutex);
-
-			// 从队列中移除当前文件
-			m_pendingUploadFiles.removeAll(filePath);
-
-			// 检查文件是否还存在
-			if (QFile::exists(filePath)) {
-				// 文件还在，重新添加到队列尾部
-				m_pendingUploadFiles.append(filePath);
-				qWarning() << "File failed after" << MAX_RETRY << "attempts, moved to end of queue:" << filePath;
-			}
-			else {
-				qWarning() << "File no longer exists, not re-adding to queue:" << filePath;
-			}
+		else if (QFile::exists(filePath)) {
+			m_pendingUploadFiles.append(filePath);
+			qWarning() << "File failed after" << MAX_RETRY << "attempts, moved to end of queue:" << filePath;
 		}
-		break;
-		QThread::msleep(10);
+		else {
+			qWarning() << "File no longer exists, not re-adding to queue:" << filePath;
+		}
+
+		m_isUploading = false;
+		shouldScheduleNext = !m_pendingUploadFiles.isEmpty();
 	}
-	// 短暂休息，避免过度占用CP
+
+	if (shouldScheduleNext) {
+		QTimer::singleShot(0, this, &UDPMultiCommunication::processUploadQueue);
+	}
 }
 
 bool UDPMultiCommunication::uploadFileImpl(const QString& filepath, const QString& data_type)
@@ -1744,11 +1592,12 @@ bool UDPMultiCommunication::parseFilenameComponents(const QString& filename, QSt
 	////qDebug() << "  Timestamp:" << timestampStr;
 	////qDebug() << "  Sequence:" << sequenceNum;
 	// 备选方案：使用正则表达式
+	const QString baseName = QFileInfo(filename).fileName();
 	QRegularExpression regex(
 		R"(^(.*?)_(.*?)_(\d+)_(STATION_PARMA|STATION_CONTROL)_(\d{10,13})_(\d+)\.dat$)"
 	);
 
-	QRegularExpressionMatch match = regex.match(filename);
+	QRegularExpressionMatch match = regex.match(baseName);
 	if (match.hasMatch()) {
 		QString deviceModel = match.captured(1);
 		QString deviceSn = match.captured(2);
@@ -1789,13 +1638,21 @@ void UDPMultiCommunication::sortQueueByTimestampDescending()
 		[this](const QString& a, const QString& b) {
 			QString timeStrA = extractTimestampFromFilename(a);
 			QString timeStrB = extractTimestampFromFilename(b);
+			const int seqA = extractSequenceFromFilename(a);
+			const int seqB = extractSequenceFromFilename(b);
 
 			bool okA, okB;
 			qint64 timeA = timeStrA.toLongLong(&okA);
 			qint64 timeB = timeStrB.toLongLong(&okB);
 
 			if (okA && okB) {
-				return timeA > timeB;
+				if (timeA != timeB) {
+					return timeA > timeB;
+				}
+				if (seqA != seqB) {
+					return seqA > seqB;
+				}
+				return a < b;
 			}
 			else if (okA) {
 				return true;   // A有效，B无效，A排在前面
@@ -1804,7 +1661,10 @@ void UDPMultiCommunication::sortQueueByTimestampDescending()
 				return false;  // B有效，A无效，B排在前面
 			}
 			else {
-				return false;  // 都无效，保持原顺序
+				if (seqA != seqB) {
+					return seqA > seqB;
+				}
+				return a < b;
 			}
 		});
 }

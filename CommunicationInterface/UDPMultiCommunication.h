@@ -118,6 +118,8 @@ private:
     void uploadFileWhenFull(const QString& fileName);
     void checkAndUploadCompletedFiles();
     bool isFileReadyForUpload(const QString& filePath);
+    bool shouldScheduleFileForUpload(const QString& filePath, const QString& currentFilePath);
+    void scheduleEligibleFilesFromDirectory(const QString& directoryPath, const QString& currentFilePath);
     void scheduleFileUpload(const QString& filePath);
     void processUploadQueue();
     int extractSequenceFromFilename(const QString& filename);
@@ -181,7 +183,5 @@ private:
     QList<QString> m_pendingUploadFiles;  // 待上传文件队列
     QMutex m_uploadMutex;               // 上传队列互斥锁
     bool m_isUploading;                 // 是否正在上传
-
-    // 添加方法声明
 
 };
