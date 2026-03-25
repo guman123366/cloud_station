@@ -1,0 +1,13 @@
+#pragma once
+
+#include <QtCore/qglobal.h>
+
+#ifndef BUILD_STATIC
+# if defined(DATAANALYSISINTERFACE_LIB)
+#  define DATAANALYSISINTERFACE_EXPORT Q_DECL_EXPORT
+# else
+#  define DATAANALYSISINTERFACE_EXPORT Q_DECL_IMPORT
+# endif
+#else
+# define DATAANALYSISINTERFACE_EXPORT
+#endif

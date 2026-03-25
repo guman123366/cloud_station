@@ -1,0 +1,17 @@
+*
+!.gitignore
+!CommunicationInterface/
+!DataAnalysisInterface/
+!UAVDataTransmition/
+
+CommunicationInterface/*
+!CommunicationInterface/*.h
+!CommunicationInterface/*.cpp
+
+DataAnalysisInterface/*
+!DataAnalysisInterface/*.h
+!DataAnalysisInterface/*.cpp
+
+UAVDataTransmition/*
+!UAVDataTransmition/*.h
+!UAVDataTransmition/*.cpp
