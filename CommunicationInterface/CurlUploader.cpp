@@ -1,4 +1,4 @@
-#include "CurlUploader.h"
+﻿#include "CurlUploader.h"
 #include <iostream>
 #include <fstream>
 #include <sys/stat.h>
@@ -722,7 +722,7 @@ int CurlUploader::getR6000FileSize() const
     if (m_logConfigs.empty()) {
         return 1; // 默认1MB
     }
-    return m_latestConfig.t1400FileSize;
+    return m_latestConfig.R6000FileSize;
 }
 
 std::string CurlUploader::getSortie()
