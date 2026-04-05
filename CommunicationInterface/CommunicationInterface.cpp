@@ -17,3 +17,13 @@ void CommunicationInterface::setCommunicationParam(QString listenAddress, int li
 	SendAddress = sendAddress;
 	SendPort = sendPort;
 }
+
+void CommunicationInterface::notifyTransportRx(const QByteArray& ary)
+{
+	emit si_transportRx(ary);
+}
+
+void CommunicationInterface::notifyTransportTx(const QByteArray& ary)
+{
+	emit si_transportTx(ary);
+}
